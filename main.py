@@ -23,6 +23,7 @@ class MouseClickHandler:
         self._last_mouse_pos = None
         self._is_panning = False
         self._is_adjusting_wl = False
+        self._dragging = False
         
     def handle_click(self, event):
         """Handle mouse click."""
@@ -30,22 +31,25 @@ class MouseClickHandler:
             self._is_panning = True
             self._last_mouse_pos = event.scenePos()
             
-    def handle_drag(self, event):
-        """Handle mouse drag for panning or window/level adjustment."""
-        if event.button() == Qt.MouseButton.LeftButton and self._is_panning:
+    def handle_move(self, pos):
+        """Handle mouse move for panning or window/level adjustment."""
+        if self._last_mouse_pos is None:
+            return
+        
+        if self._is_panning and self._dragging:
             # Pan the image
-            delta = event.scenePos() - self._last_mouse_pos
-            self._last_mouse_pos = event.scenePos()
+            delta = pos - self._last_mouse_pos
+            self._last_mouse_pos = pos
             
             # Get the view box and translate
             view_box = self.image_view.getPlotItem().getViewBox()
             if view_box:
                 view_box.translateBy(x=-delta.x() / view_box.width(), y=-delta.y() / view_box.height())
                 
-        elif event.button() == Qt.MouseButton.RightButton and self._is_adjusting_wl:
+        elif self._is_adjusting_wl and self._dragging:
             # Adjust window/level
-            delta = event.scenePos() - self._last_mouse_pos
-            self._last_mouse_pos = event.scenePos()
+            delta = pos - self._last_mouse_pos
+            self._last_mouse_pos = pos
             
             # Horizontal = window width, Vertical = window center
             self.image_view._window_width += delta.x()
@@ -56,6 +60,14 @@ class MouseClickHandler:
             
             self.image_view._update_display()
             self.image_view.windowLevelChanged.emit(self.image_view._window_width, self.image_view._window_center)
+    
+    def start_drag(self):
+        """Start dragging."""
+        self._dragging = True
+    
+    def end_drag(self):
+        """End dragging."""
+        self._dragging = False
 
 
 class ImageViewWidget(pg.PlotWidget):
@@ -102,7 +114,7 @@ class ImageViewWidget(pg.PlotWidget):
         # For mouse click tracking
         self._mouse_click_handler = MouseClickHandler(self)
         self.scene().sigMouseClicked.connect(self._mouse_click_handler.handle_click)
-        self.scene().sigMouseDragged.connect(self._mouse_click_handler.handle_drag)
+        self.scene().sigMouseMoved.connect(self._mouse_click_handler.handle_move)
         
         # Install event filter for mouse press/release
         self.installEventFilter(self)
@@ -187,17 +199,25 @@ class ImageViewWidget(pg.PlotWidget):
         """Handle mouse press for right-click W/L adjustment."""
         if event.button() == Qt.MouseButton.RightButton:
             self._mouse_click_handler._is_adjusting_wl = True
-            self._mouse_click_handler._last_mouse_pos = event.pos()
+            self._mouse_click_handler._last_mouse_pos = event.position()
+            self._mouse_click_handler.start_drag()
+            return True
+        elif event.button() == Qt.MouseButton.LeftButton:
+            self._mouse_click_handler._last_mouse_pos = event.position()
+            self._mouse_click_handler.start_drag()
             return True
         return False
     
     def _handle_mouse_release(self, event):
         """Handle mouse release."""
+        self._mouse_click_handler.end_drag()
+        
         if event.button() == Qt.MouseButton.RightButton:
             self._mouse_click_handler._is_adjusting_wl = False
             return True
         elif event.button() == Qt.MouseButton.LeftButton:
             self._mouse_click_handler._is_panning = False
+            self._mouse_click_handler._last_mouse_pos = None
             return True
         return False
     
