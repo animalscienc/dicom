@@ -1,0 +1,17 @@
+# DICOM Viewer Dependencies
+# Python 3.10+
+
+# GUI Framework
+PyQt6>=6.5.0
+
+# DICOM Processing
+pydicom>=2.4.0
+
+# Numerical Processing
+numpy>=1.24.0
+
+# High-performance Image Display
+pyqtgraph>=0.13.0
+
+# For better font rendering (optional)
+Pillow>=10.0.0
