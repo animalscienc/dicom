@@ -15,7 +15,50 @@ import pydicom
 import pyqtgraph as pg
 
 
-class ImageViewWidget(pg.GraphicsLayoutWidget):
+class MouseClickHandler:
+    """Handler for mouse click and drag events."""
+    
+    def __init__(self, image_view):
+        self.image_view = image_view
+        self._last_mouse_pos = None
+        self._is_panning = False
+        self._is_adjusting_wl = False
+        
+    def handle_click(self, event):
+        """Handle mouse click."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._is_panning = True
+            self._last_mouse_pos = event.scenePos()
+            
+    def handle_drag(self, event):
+        """Handle mouse drag for panning or window/level adjustment."""
+        if event.button() == Qt.MouseButton.LeftButton and self._is_panning:
+            # Pan the image
+            delta = event.scenePos() - self._last_mouse_pos
+            self._last_mouse_pos = event.scenePos()
+            
+            # Get the view box and translate
+            view_box = self.image_view.getPlotItem().getViewBox()
+            if view_box:
+                view_box.translateBy(x=-delta.x() / view_box.width(), y=-delta.y() / view_box.height())
+                
+        elif event.button() == Qt.MouseButton.RightButton and self._is_adjusting_wl:
+            # Adjust window/level
+            delta = event.scenePos() - self._last_mouse_pos
+            self._last_mouse_pos = event.scenePos()
+            
+            # Horizontal = window width, Vertical = window center
+            self.image_view._window_width += delta.x()
+            self.image_view._window_center -= delta.y()
+            
+            # Clamp values
+            self.image_view._window_width = max(1, self.image_view._window_width)
+            
+            self.image_view._update_display()
+            self.image_view.windowLevelChanged.emit(self.image_view._window_width, self.image_view._window_center)
+
+
+class ImageViewWidget(pg.PlotWidget):
     """Custom image view widget with window/level and zoom/pan support."""
     
     windowLevelChanged = pyqtSignal(float, float)
@@ -24,6 +67,10 @@ class ImageViewWidget(pg.GraphicsLayoutWidget):
     
     def __init__(self, parent=None):
         super().__init__(parent)
+        
+        # Remove axes for cleaner medical image view
+        self.getPlotItem().hideAxis('left')
+        self.getPlotItem().hideAxis('bottom')
         
         # Image item
         self.image_item = pg.ImageItem()
@@ -45,14 +92,20 @@ class ImageViewWidget(pg.GraphicsLayoutWidget):
         # Enable mouse tracking
         self.setMouseTracking(True)
         self.scene().sigMouseMoved.connect(self._on_mouse_move)
-        self.scene().sigMouseClicked.connect(self._on_mouse_click)
-        self.scene().sigMouseDragged.connect(self._on_mouse_drag)
         
         # Set background
         self.setBackground('#1e1e1e')
         
         # Install wheel event filter for slice navigation
         self.wheelEvent = self._handle_wheel
+        
+        # For mouse click tracking
+        self._mouse_click_handler = MouseClickHandler(self)
+        self.scene().sigMouseClicked.connect(self._mouse_click_handler.handle_click)
+        self.scene().sigMouseDragged.connect(self._mouse_click_handler.handle_drag)
+        
+        # Install event filter for mouse press/release
+        self.installEventFilter(self)
         
     def set_image(self, image_array):
         """Set the DICOM image data."""
@@ -126,63 +179,39 @@ class ImageViewWidget(pg.GraphicsLayoutWidget):
         """Set current slice index."""
         self._current_slice = index
         
-    def _on_mouse_click(self, event):
-        """Handle mouse click."""
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._is_panning = True
-            self._last_mouse_pos = event.scenePos()
-            
-    def _on_mouse_drag(self, event):
-        """Handle mouse drag for panning or window/level adjustment."""
-        if event.button() == Qt.MouseButton.LeftButton and self._is_panning:
-            # Pan the image
-            delta = event.scenePos() - self._last_mouse_pos
-            self._last_mouse_pos = event.scenePos()
-            
-            # Move the view
-            self._view_box = self.image_item.parentItem()
-            if hasattr(self, '_view_box'):
-                self._view_box.translateBy(-delta.x(), -delta.y())
-                
-        elif event.button() == Qt.MouseButton.RightButton and self._is_adjusting_wl:
-            # Adjust window/level
-            delta = event.scenePos() - self._last_mouse_pos
-            self._last_mouse_pos = event.scenePos()
-            
-            # Horizontal = window width, Vertical = window center
-            self._window_width += delta.x()
-            self._window_center -= delta.y()
-            
-            # Clamp values
-            self._window_width = max(1, self._window_width)
-            
-            self._update_display()
-            self.windowLevelChanged.emit(self._window_width, self._window_center)
-            
     def _on_mouse_move(self, event):
         """Track mouse position."""
         pass
-        
-    def event(self, event):
-        """Handle mouse press/release events."""
-        if event.type() == QEvent.Type.MouseButtonPress:
-            if event.button() == Qt.MouseButton.RightButton:
-                self._is_adjusting_wl = True
-                self._last_mouse_pos = event.pos()
-                return True
-        elif event.type() == QEvent.Type.MouseButtonRelease:
-            if event.button() == Qt.MouseButton.RightButton:
-                self._is_adjusting_wl = False
-                return True
-            elif event.button() == Qt.MouseButton.LeftButton:
-                self._is_panning = False
-                return True
-                
-        return super().event(event)
+    
+    def _handle_mouse_press(self, event):
+        """Handle mouse press for right-click W/L adjustment."""
+        if event.button() == Qt.MouseButton.RightButton:
+            self._mouse_click_handler._is_adjusting_wl = True
+            self._mouse_click_handler._last_mouse_pos = event.pos()
+            return True
+        return False
+    
+    def _handle_mouse_release(self, event):
+        """Handle mouse release."""
+        if event.button() == Qt.MouseButton.RightButton:
+            self._mouse_click_handler._is_adjusting_wl = False
+            return True
+        elif event.button() == Qt.MouseButton.LeftButton:
+            self._mouse_click_handler._is_panning = False
+            return True
+        return False
     
     def get_window_level(self):
         """Get current window and level values."""
         return self._window_width, self._window_center
+    
+    def eventFilter(self, obj, event):
+        """Event filter for handling mouse press/release."""
+        if event.type() == QEvent.Type.MouseButtonPress:
+            return self._handle_mouse_press(event)
+        elif event.type() == QEvent.Type.MouseButtonRelease:
+            return self._handle_mouse_release(event)
+        return super().eventFilter(obj, event)
 
 
 class MetadataPanel(QWidget):
